@@ -12,6 +12,7 @@ from app.db import (
     get_reading_by_date,
     daily_email_already_sent,
     mark_daily_email_sent,
+    is_active_user,
 )
 from app.gmail_client import GmailClient, GmailMessage
 from app.parser import extract_completed_dates
@@ -65,6 +66,20 @@ def reject_non_admin(config: Config, gmail: GmailClient, message: GmailMessage) 
         body=(
             "This Bible Study admin request was denied.\n\n"
             f"Only {config.admin_email} is authorized to add or remove users."
+        ),
+        thread_id=message.thread_id,
+    )
+    gmail.add_label(message.message_id, config.failed_label)
+
+
+def reject_non_user(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    gmail.send_email(
+        to=message.sender_email,
+        subject="Bible Study Request Denied",
+        body=(
+            "Your Bible Study email was received, but your email address is not currently "
+            "an active approved user for this Bible Study.\n\n"
+            "Ask the Bible Study admin to add you first."
         ),
         thread_id=message.thread_id,
     )
@@ -159,6 +174,11 @@ def process_remove_user_email(config: Config, gmail: GmailClient, message: Gmail
 
 
 def process_completion_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    with connect(config.database_path) as conn:
+        if not is_active_user(conn, message.sender_email):
+            reject_non_user(config, gmail, message)
+            return
+
     default_year = date.today().year
     dates = extract_completed_dates(message.body, default_year=default_year)
 
@@ -179,13 +199,6 @@ def process_completion_email(config: Config, gmail: GmailClient, message: GmailM
         return
 
     with connect(config.database_path) as conn:
-        upsert_user(
-            conn=conn,
-            email=message.sender_email,
-            display_name=message.sender_name,
-            signup_date=date.today().isoformat(),
-        )
-
         for reading_date in dates:
             add_completion(
                 conn=conn,
@@ -218,6 +231,10 @@ def process_completion_email(config: Config, gmail: GmailClient, message: GmailM
 
 def process_status_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
     with connect(config.database_path) as conn:
+        if not is_active_user(conn, message.sender_email) and not is_admin(config, message):
+            reject_non_user(config, gmail, message)
+            return
+
         report = build_group_status_report(conn=conn)
 
     gmail.send_email(

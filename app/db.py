@@ -74,7 +74,6 @@ def upsert_user(conn: sqlite3.Connection, email: str, display_name: str | None, 
         VALUES (?, ?, ?, 1, ?)
         ON CONFLICT(email) DO UPDATE SET
             display_name = COALESCE(excluded.display_name, users.display_name),
-            signup_date = COALESCE(users.signup_date, excluded.signup_date),
             active = 1
         """,
         (email.lower().strip(), display_name, signup_date, datetime.utcnow().isoformat()),
@@ -90,6 +89,23 @@ def remove_user(conn: sqlite3.Connection, email: str) -> None:
         """,
         (email.lower().strip(),),
     )
+
+
+def get_user_by_email(conn: sqlite3.Connection, email: str):
+    return conn.execute(
+        """
+        SELECT email, display_name, signup_date, active
+        FROM users
+        WHERE email = ?
+        LIMIT 1
+        """,
+        (email.lower().strip(),),
+    ).fetchone()
+
+
+def is_active_user(conn: sqlite3.Connection, email: str) -> bool:
+    row = get_user_by_email(conn, email)
+    return bool(row and row["active"] == 1)
 
 
 def add_completion(
