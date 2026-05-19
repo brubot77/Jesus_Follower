@@ -7,7 +7,6 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 
@@ -34,32 +33,29 @@ class GmailClient:
         self.service = self._build_service()
 
     def _build_service(self):
-        creds = None
+        token_file = Path(self.token_path)
 
-        if Path(self.token_path).exists():
-            creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                self.credentials_path,
-                SCOPES,
+        if not token_file.exists():
+            raise RuntimeError(
+                f"Gmail token not found: {self.token_path}\n\n"
+                "Create token.json on your Windows/main machine by running:\n"
+                "  python -m app.cli process-email --max-results 1\n\n"
+                "Then upload token.json to the VPS at:\n"
+                f"  {self.token_path}"
             )
 
-            try:
-                creds = flow.run_local_server(port=0)
-            except Exception:
-                print("")
-                print("Could not open a browser on this machine.")
-                print("Use the authorization URL below, approve access, then paste the code here.")
-                print("")
-                creds = flow.run_console()
-            
-            Path(self.token_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.token_path, "w", encoding="utf-8") as token_file:
-                token_file.write(creds.to_json())
+        creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
+
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            token_file.write_text(creds.to_json(), encoding="utf-8")
+
+        if not creds or not creds.valid:
+            raise RuntimeError(
+                "Gmail token exists but is not valid.\n\n"
+                "Create a fresh token.json on your Windows/main machine and upload it to the VPS.\n"
+                f"Expected VPS token path: {self.token_path}"
+            )
 
         return build("gmail", "v1", credentials=creds)
 
