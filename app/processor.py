@@ -233,6 +233,7 @@ def process_completion_email(config: Config, gmail: GmailClient, message: GmailM
                     reading_date=next_open["reading_date"],
                     plan_day=next_open["plan_day"],
                     reference=next_open["reference"],
+                    briefings_path=config.briefings_path,
                 )
             )
         else:
@@ -294,6 +295,7 @@ def process_next_email(config: Config, gmail: GmailClient, message: GmailMessage
         reading_date=next_open["reading_date"],
         plan_day=next_open["plan_day"],
         reference=next_open["reference"],
+        briefings_path=config.briefings_path,
     )
 
     gmail.send_email(
@@ -375,6 +377,7 @@ def send_daily_readings(config: Config, reading_date: str | None = None, force: 
                 reading_date=reading["reading_date"],
                 plan_day=reading["plan_day"],
                 reference=reading["reference"],
+                briefings_path=config.briefings_path,
             )
 
             gmail.send_email(
