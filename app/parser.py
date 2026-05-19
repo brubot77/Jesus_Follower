@@ -94,7 +94,7 @@ def extract_completed_dates(text: str, default_year: int | None = None) -> list[
         rf"((?:{MONTH_PATTERN})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}/\d{{1,2}}/\d{{2,4}})"
     )
 
-    for start_raw, _, end_raw, _ in re.findall(range_pattern, text, flags=re.IGNORECASE):
+    for start_raw, end_raw in re.findall(range_pattern, text, flags=re.IGNORECASE):
         try:
             start_clean = re.sub(r"(st|nd|rd|th)\b", "", start_raw, flags=re.IGNORECASE)
             end_clean = re.sub(r"(st|nd|rd|th)\b", "", end_raw, flags=re.IGNORECASE)
