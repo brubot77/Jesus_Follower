@@ -6,7 +6,7 @@ from app.config import get_config
 from app.db import init_db, connect, upsert_user, add_completion
 from app.parser import extract_completed_dates
 from app.plan import generate_plan, load_plan_to_db
-from app.processor import process_inbox
+from app.processor import process_inbox, send_daily_readings
 from app.reports import build_user_report, build_group_status_report
 
 
@@ -58,12 +58,14 @@ def cmd_status(args):
         user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
         reading_count = conn.execute("SELECT COUNT(*) AS c FROM readings").fetchone()["c"]
         completion_count = conn.execute("SELECT COUNT(*) AS c FROM user_completions").fetchone()["c"]
+        daily_sent_count = conn.execute("SELECT COUNT(*) AS c FROM daily_emails_sent").fetchone()["c"]
 
     print("Jesus_Follower status")
     print("---------------------")
     print(f"Users: {user_count}")
     print(f"Readings: {reading_count}")
     print(f"Completions: {completion_count}")
+    print(f"Daily emails sent: {daily_sent_count}")
     print(f"Database: {config.database_path}")
 
 
@@ -156,6 +158,19 @@ def cmd_process_email(args):
     print(f"Processed {count} Bible Study email(s).")
 
 
+def cmd_send_daily(args):
+    config = get_config()
+
+    count = send_daily_readings(
+        config=config,
+        reading_date=args.date,
+        force=args.force,
+    )
+
+    target_date = args.date or date.today().isoformat()
+    print(f"Sent {count} daily reading email(s) for {target_date}.")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="Jesus_Follower",
@@ -201,6 +216,11 @@ def build_parser():
     process_email_parser = subparsers.add_parser("process-email", help="Process Bible Study emails from Gmail.")
     process_email_parser.add_argument("--max-results", required=False, type=int, default=10)
     process_email_parser.set_defaults(func=cmd_process_email)
+
+    send_daily_parser = subparsers.add_parser("send-daily", help="Send daily Bible reading email to active users.")
+    send_daily_parser.add_argument("--date", required=False, help="Optional date YYYY-MM-DD. Defaults to today.")
+    send_daily_parser.add_argument("--force", action="store_true", help="Send even if already sent for that date.")
+    send_daily_parser.set_defaults(func=cmd_send_daily)
 
     return parser
 
