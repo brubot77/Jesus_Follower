@@ -44,11 +44,19 @@ class GmailClient:
                 creds.refresh(Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_path,
-                    SCOPES,
-                )
-                creds = flow.run_local_server(port=0)
+                self.credentials_path,
+                SCOPES,
+            )
 
+            try:
+                creds = flow.run_local_server(port=0)
+            except Exception:
+                print("")
+                print("Could not open a browser on this machine.")
+                print("Use the authorization URL below, approve access, then paste the code here.")
+                print("")
+                creds = flow.run_console()
+            
             Path(self.token_path).parent.mkdir(parents=True, exist_ok=True)
             with open(self.token_path, "w", encoding="utf-8") as token_file:
                 token_file.write(creds.to_json())
