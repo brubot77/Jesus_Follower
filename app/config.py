@@ -18,6 +18,7 @@ class Config:
 
     study_start_date: str
     bot_email: str
+    admin_email: str
 
     gmail_query: str
     processed_label: str
@@ -38,6 +39,7 @@ def get_config() -> Config:
 
         study_start_date=os.getenv("STUDY_START_DATE", "2026-05-19"),
         bot_email=os.getenv("BOT_EMAIL", "bru.bot77@gmail.com"),
+        admin_email=os.getenv("ADMIN_EMAIL", "bru.bot77@gmail.com").lower().strip(),
 
         gmail_query=os.getenv(
             "GMAIL_QUERY",

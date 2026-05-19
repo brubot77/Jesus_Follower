@@ -1,3 +1,4 @@
+import re
 from datetime import date
 
 from app.briefings import format_daily_email
@@ -5,6 +6,7 @@ from app.config import Config
 from app.db import (
     connect,
     upsert_user,
+    remove_user,
     add_completion,
     get_users,
     get_reading_by_date,
@@ -16,14 +18,144 @@ from app.parser import extract_completed_dates
 from app.reports import build_user_report, build_group_status_report
 
 
+def normalize_subject(message: GmailMessage) -> str:
+    return (message.subject or "").strip().lower()
+
+
+def is_admin(config: Config, message: GmailMessage) -> bool:
+    return message.sender_email.lower().strip() == config.admin_email.lower().strip()
+
+
 def is_bible_study_completion(message: GmailMessage) -> bool:
-    subject = (message.subject or "").strip().lower()
-    return subject == "bible study"
+    return normalize_subject(message) == "bible study"
 
 
 def is_bible_study_status_request(message: GmailMessage) -> bool:
-    subject = (message.subject or "").strip().lower()
-    return subject == "bible study status"
+    return normalize_subject(message) == "bible study status"
+
+
+def is_add_user_request(message: GmailMessage) -> bool:
+    return normalize_subject(message) == "bible study add user"
+
+
+def is_remove_user_request(message: GmailMessage) -> bool:
+    return normalize_subject(message) == "bible study remove user"
+
+
+def extract_email_from_text(text: str) -> str | None:
+    match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text or "", flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(0).lower().strip()
+
+
+def extract_name_from_text(text: str) -> str | None:
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line.lower().startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+            return name or None
+    return None
+
+
+def reject_non_admin(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    gmail.send_email(
+        to=message.sender_email,
+        subject="Bible Study Admin Request Denied",
+        body=(
+            "This Bible Study admin request was denied.\n\n"
+            f"Only {config.admin_email} is authorized to add or remove users."
+        ),
+        thread_id=message.thread_id,
+    )
+    gmail.add_label(message.message_id, config.failed_label)
+
+
+def process_add_user_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    if not is_admin(config, message):
+        reject_non_admin(config, gmail, message)
+        return
+
+    target_email = extract_email_from_text(message.body)
+    target_name = extract_name_from_text(message.body)
+
+    if not target_email:
+        gmail.send_email(
+            to=message.sender_email,
+            subject="Bible Study Add User Failed",
+            body=(
+                "I could not find an email address to add.\n\n"
+                "Use this format:\n"
+                "Subject: Bible Study Add User\n\n"
+                "newuser@example.com\n"
+                "Name: John Smith"
+            ),
+            thread_id=message.thread_id,
+        )
+        gmail.add_label(message.message_id, config.failed_label)
+        return
+
+    with connect(config.database_path) as conn:
+        upsert_user(
+            conn=conn,
+            email=target_email,
+            display_name=target_name,
+            signup_date=date.today().isoformat(),
+        )
+        conn.commit()
+
+    gmail.send_email(
+        to=message.sender_email,
+        subject="Bible Study User Added",
+        body=(
+            "User added or reactivated.\n\n"
+            f"Email: {target_email}\n"
+            f"Name: {target_name or ''}\n"
+            f"Signup date: {date.today().isoformat()}"
+        ),
+        thread_id=message.thread_id,
+    )
+
+    gmail.add_label(message.message_id, config.processed_label)
+
+
+def process_remove_user_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    if not is_admin(config, message):
+        reject_non_admin(config, gmail, message)
+        return
+
+    target_email = extract_email_from_text(message.body)
+
+    if not target_email:
+        gmail.send_email(
+            to=message.sender_email,
+            subject="Bible Study Remove User Failed",
+            body=(
+                "I could not find an email address to remove.\n\n"
+                "Use this format:\n"
+                "Subject: Bible Study Remove User\n\n"
+                "newuser@example.com"
+            ),
+            thread_id=message.thread_id,
+        )
+        gmail.add_label(message.message_id, config.failed_label)
+        return
+
+    with connect(config.database_path) as conn:
+        remove_user(conn=conn, email=target_email)
+        conn.commit()
+
+    gmail.send_email(
+        to=message.sender_email,
+        subject="Bible Study User Removed",
+        body=(
+            "User removed from active Bible Study emails.\n\n"
+            f"Email: {target_email}"
+        ),
+        thread_id=message.thread_id,
+    )
+
+    gmail.add_label(message.message_id, config.processed_label)
 
 
 def process_completion_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
@@ -115,7 +247,13 @@ def process_inbox(config: Config, max_results: int = 10) -> int:
         message = gmail.get_message(message_id)
 
         try:
-            if is_bible_study_completion(message):
+            if is_add_user_request(message):
+                process_add_user_email(config, gmail, message)
+                processed_count += 1
+            elif is_remove_user_request(message):
+                process_remove_user_email(config, gmail, message)
+                processed_count += 1
+            elif is_bible_study_completion(message):
                 process_completion_email(config, gmail, message)
                 processed_count += 1
             elif is_bible_study_status_request(message):
