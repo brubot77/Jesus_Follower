@@ -8,6 +8,17 @@ def _today_iso() -> str:
     return date.today().isoformat()
 
 
+def get_next_open_reading(conn, email: str):
+    readings = get_readings(conn)
+    completed = get_user_completions(conn, email)
+
+    for r in readings:
+        if r["reading_date"] not in completed:
+            return r
+
+    return None
+
+
 def build_user_report(conn, email: str, today_iso: str | None = None) -> str:
     if today_iso is None:
         today_iso = _today_iso()
@@ -50,11 +61,7 @@ def build_user_report(conn, email: str, today_iso: str | None = None) -> str:
         )
     )
 
-    next_open = None
-    for r in readings:
-        if r["reading_date"] not in completed:
-            next_open = r
-            break
+    next_open = get_next_open_reading(conn, email)
 
     if next_open:
         report.append("")
@@ -84,11 +91,7 @@ def build_group_status_report(conn, today_iso: str | None = None) -> str:
         if total_due:
             percent = round((completed_due / total_due) * 100, 1)
 
-        next_open = None
-        for r in readings:
-            if r["reading_date"] not in completed:
-                next_open = r
-                break
+        next_open = get_next_open_reading(conn, email)
 
         rows.append(
             [

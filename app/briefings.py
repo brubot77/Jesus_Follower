@@ -36,16 +36,14 @@ def build_daily_briefing(reference: str) -> dict:
     }
 
 
-def format_daily_email(reading_date: str, plan_day: int, reference: str) -> tuple[str, str]:
+def format_reading_breakdown(reading_date: str, plan_day: int, reference: str) -> str:
     briefing = build_daily_briefing(reference)
-
-    subject = f"Bible Study - {reading_date} - {reference}"
 
     body_lines = [
         f"Bible Study - Day {plan_day}",
         "",
         f"Date: {reading_date}",
-        f"Today’s Reading: {reference}",
+        f"Reading: {reference}",
         "",
         "Read this passage in your own Bible, preferably NLV.",
         "",
@@ -61,12 +59,7 @@ def format_daily_email(reading_date: str, plan_day: int, reference: str) -> tupl
     for item in briefing["cross_references"]:
         body_lines.append(f"- {item}")
 
-    body_lines.extend(
-        [
-            "",
-            "Key Takeaways:",
-        ]
-    )
+    body_lines.extend(["", "Key Takeaways:"])
 
     for item in briefing["key_takeaways"]:
         body_lines.append(f"- {item}")
@@ -85,4 +78,14 @@ def format_daily_email(reading_date: str, plan_day: int, reference: str) -> tupl
         ]
     )
 
-    return subject, "\n".join(body_lines)
+    return "\n".join(body_lines)
+
+
+def format_daily_email(reading_date: str, plan_day: int, reference: str) -> tuple[str, str]:
+    subject = f"Bible Study - {reading_date} - {reference}"
+    body = format_reading_breakdown(
+        reading_date=reading_date,
+        plan_day=plan_day,
+        reference=reference,
+    )
+    return subject, body

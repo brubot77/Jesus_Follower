@@ -1,7 +1,7 @@
 import re
 from datetime import date
 
-from app.briefings import format_daily_email
+from app.briefings import format_daily_email, format_reading_breakdown
 from app.config import Config
 from app.db import (
     connect,
@@ -16,7 +16,7 @@ from app.db import (
 )
 from app.gmail_client import GmailClient, GmailMessage
 from app.parser import extract_completed_dates
-from app.reports import build_user_report, build_group_status_report
+from app.reports import build_user_report, build_group_status_report, get_next_open_reading
 
 
 def normalize_subject(message: GmailMessage) -> str:
@@ -33,6 +33,10 @@ def is_bible_study_completion(message: GmailMessage) -> bool:
 
 def is_bible_study_status_request(message: GmailMessage) -> bool:
     return normalize_subject(message) == "bible study status"
+
+
+def is_bible_study_next_request(message: GmailMessage) -> bool:
+    return normalize_subject(message) == "bible study next"
 
 
 def is_add_user_request(message: GmailMessage) -> bool:
@@ -126,7 +130,10 @@ def process_add_user_email(config: Config, gmail: GmailClient, message: GmailMes
             "User added or reactivated.\n\n"
             f"Email: {target_email}\n"
             f"Name: {target_name or ''}\n"
-            f"Signup date: {date.today().isoformat()}"
+            f"Signup date: {date.today().isoformat()}\n\n"
+            "The user can now email:\n"
+            "Subject: Bible Study Next\n\n"
+            "to receive their next reading breakdown."
         ),
         thread_id=message.thread_id,
     )
@@ -214,14 +221,32 @@ def process_completion_email(config: Config, gmail: GmailClient, message: GmailM
             email=message.sender_email,
         )
 
+        next_open = get_next_open_reading(conn, message.sender_email)
+
+        next_breakdown = ""
+        if next_open:
+            next_breakdown = (
+                "\n\n"
+                "Next Reading Breakdown\n"
+                "======================\n\n"
+                + format_reading_breakdown(
+                    reading_date=next_open["reading_date"],
+                    plan_day=next_open["plan_day"],
+                    reference=next_open["reference"],
+                )
+            )
+        else:
+            next_breakdown = "\n\nYou have completed all readings in the current plan."
+
     gmail.send_email(
         to=message.sender_email,
-        subject="Bible Study Progress Updated",
+        subject="Bible Study Progress Updated - Next Reading Included",
         body=(
             f"Recorded {len(dates)} completed reading date(s):\n"
             + "\n".join([f"- {d}" for d in dates])
             + "\n\n"
             + report
+            + next_breakdown
         ),
         thread_id=message.thread_id,
     )
@@ -241,6 +266,40 @@ def process_status_email(config: Config, gmail: GmailClient, message: GmailMessa
         to=message.sender_email,
         subject="Bible Study Group Status",
         body=report,
+        thread_id=message.thread_id,
+    )
+
+    gmail.add_label(message.message_id, config.processed_label)
+
+
+def process_next_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    with connect(config.database_path) as conn:
+        if not is_active_user(conn, message.sender_email) and not is_admin(config, message):
+            reject_non_user(config, gmail, message)
+            return
+
+        next_open = get_next_open_reading(conn, message.sender_email)
+
+    if not next_open:
+        gmail.send_email(
+            to=message.sender_email,
+            subject="Bible Study Next Reading",
+            body="You have completed all readings in the current plan.",
+            thread_id=message.thread_id,
+        )
+        gmail.add_label(message.message_id, config.processed_label)
+        return
+
+    body = format_reading_breakdown(
+        reading_date=next_open["reading_date"],
+        plan_day=next_open["plan_day"],
+        reference=next_open["reference"],
+    )
+
+    gmail.send_email(
+        to=message.sender_email,
+        subject=f"Bible Study Next Reading - {next_open['reading_date']} - {next_open['reference']}",
+        body=body,
         thread_id=message.thread_id,
     )
 
@@ -275,6 +334,9 @@ def process_inbox(config: Config, max_results: int = 10) -> int:
                 processed_count += 1
             elif is_bible_study_status_request(message):
                 process_status_email(config, gmail, message)
+                processed_count += 1
+            elif is_bible_study_next_request(message):
+                process_next_email(config, gmail, message)
                 processed_count += 1
         except Exception:
             gmail.add_label(message.message_id, config.failed_label)
