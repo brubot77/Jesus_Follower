@@ -1,7 +1,13 @@
 import re
 from datetime import date
 
-from app.briefings import format_daily_email, format_reading_breakdown
+from app.briefings import (
+    format_daily_email,
+    format_reading_breakdown,
+    parse_briefing_json_from_text,
+    add_or_update_briefing,
+)
+
 from app.config import Config
 from app.db import (
     connect,
@@ -46,6 +52,8 @@ def is_add_user_request(message: GmailMessage) -> bool:
 def is_remove_user_request(message: GmailMessage) -> bool:
     return normalize_subject(message) == "bible study remove user"
 
+def is_add_briefing_request(message: GmailMessage) -> bool:
+    return normalize_subject(message) == "bible study add briefing"
 
 def extract_email_from_text(text: str) -> str | None:
     match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text or "", flags=re.IGNORECASE)
@@ -179,6 +187,52 @@ def process_remove_user_email(config: Config, gmail: GmailClient, message: Gmail
 
     gmail.add_label(message.message_id, config.processed_label)
 
+def process_add_briefing_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
+    if not is_admin(config, message):
+        reject_non_admin(config, gmail, message)
+        return
+
+    try:
+        payload = parse_briefing_json_from_text(message.body)
+        reference = add_or_update_briefing(
+            briefings_path=config.briefings_path,
+            payload=payload,
+        )
+    except Exception as exc:
+        gmail.send_email(
+            to=message.sender_email,
+            subject="Bible Study Add Briefing Failed",
+            body=(
+                "I could not add the briefing.\n\n"
+                f"Error: {exc}\n\n"
+                "Use this format:\n\n"
+                "{\n"
+                '  "reference": "Genesis 16-18",\n'
+                '  "overview": "...",\n'
+                '  "context": "...",\n'
+                '  "cross_references": ["..."],\n'
+                '  "key_takeaways": ["..."],\n'
+                '  "application": "..."\n'
+                "}"
+            ),
+            thread_id=message.thread_id,
+        )
+        gmail.add_label(message.message_id, config.failed_label)
+        return
+
+    gmail.send_email(
+        to=message.sender_email,
+        subject="Bible Study Briefing Added",
+        body=(
+            "Approved briefing added or updated.\n\n"
+            f"Reference: {reference}\n"
+            f"File: {config.briefings_path}\n\n"
+            "Future daily emails and Bible Study Next replies for this passage will use this approved briefing."
+        ),
+        thread_id=message.thread_id,
+    )
+
+    gmail.add_label(message.message_id, config.processed_label)
 
 def process_completion_email(config: Config, gmail: GmailClient, message: GmailMessage) -> None:
     with connect(config.database_path) as conn:
@@ -330,6 +384,9 @@ def process_inbox(config: Config, max_results: int = 10) -> int:
                 processed_count += 1
             elif is_remove_user_request(message):
                 process_remove_user_email(config, gmail, message)
+                processed_count += 1
+            elif is_add_briefing_request(message):
+                process_add_briefing_email(config, gmail, message)
                 processed_count += 1
             elif is_bible_study_completion(message):
                 process_completion_email(config, gmail, message)

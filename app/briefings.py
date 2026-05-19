@@ -3,12 +3,6 @@ from pathlib import Path
 
 
 def load_briefings(briefings_path: str | None = None) -> dict:
-    """
-    Loads passage-specific briefings from data/briefings.json.
-
-    If the file is missing or invalid, returns an empty dictionary.
-    """
-
     if briefings_path is None:
         briefings_path = str(Path("data") / "briefings.json")
 
@@ -21,54 +15,124 @@ def load_briefings(briefings_path: str | None = None) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        if isinstance(data, dict):
-            return data
-
-        return {}
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
+def save_briefings(briefings_path: str, briefings: dict) -> None:
+    path = Path(briefings_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(briefings, f, indent=2, ensure_ascii=False)
+
+
+def validate_briefing_payload(payload: dict) -> tuple[bool, str]:
+    required_fields = [
+        "reference",
+        "overview",
+        "context",
+        "cross_references",
+        "key_takeaways",
+        "application",
+    ]
+
+    for field in required_fields:
+        if field not in payload:
+            return False, f"Missing required field: {field}"
+
+    if not isinstance(payload["reference"], str) or not payload["reference"].strip():
+        return False, "reference must be a non-empty string"
+
+    if not isinstance(payload["overview"], str) or not payload["overview"].strip():
+        return False, "overview must be a non-empty string"
+
+    if not isinstance(payload["context"], str) or not payload["context"].strip():
+        return False, "context must be a non-empty string"
+
+    if not isinstance(payload["cross_references"], list):
+        return False, "cross_references must be a list"
+
+    if not isinstance(payload["key_takeaways"], list):
+        return False, "key_takeaways must be a list"
+
+    if not isinstance(payload["application"], str) or not payload["application"].strip():
+        return False, "application must be a non-empty string"
+
+    return True, "OK"
+
+
+def add_or_update_briefing(briefings_path: str, payload: dict) -> str:
+    is_valid, message = validate_briefing_payload(payload)
+    if not is_valid:
+        raise ValueError(message)
+
+    reference = payload["reference"].strip()
+
+    entry = {
+        "overview": payload["overview"].strip(),
+        "context": payload["context"].strip(),
+        "cross_references": [str(x).strip() for x in payload["cross_references"] if str(x).strip()],
+        "key_takeaways": [str(x).strip() for x in payload["key_takeaways"] if str(x).strip()],
+        "application": payload["application"].strip(),
+    }
+
+    briefings = load_briefings(briefings_path)
+    briefings[reference] = entry
+    save_briefings(briefings_path, briefings)
+
+    return reference
+
+
+def parse_briefing_json_from_text(text: str) -> dict:
+    cleaned = (text or "").strip()
+
+    # Allows email bodies that wrap JSON in ```json ... ```
+    if "```" in cleaned:
+        parts = cleaned.split("```")
+        for part in parts:
+            candidate = part.strip()
+            if candidate.lower().startswith("json"):
+                candidate = candidate[4:].strip()
+            if candidate.startswith("{") and candidate.endswith("}"):
+                return json.loads(candidate)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No JSON object found in email body.")
+
+    return json.loads(cleaned[start : end + 1])
+
+
 def build_daily_briefing(reference: str, briefings_path: str | None = None) -> dict:
-    """
-    Returns a passage-specific devotional/study briefing when available.
-
-    This intentionally does not include full copyrighted Bible text.
-    User should read the passage from their own Bible, preferably NLV.
-    """
-
     normalized_reference = (reference or "").strip()
     briefings = load_briefings(briefings_path)
 
     if normalized_reference in briefings:
-        return briefings[normalized_reference]
+        briefing = briefings[normalized_reference]
+        briefing["_approved"] = True
+        return briefing
 
     return {
+        "_approved": False,
         "overview": (
-            f"Today’s reading is {reference}. Read the full passage in your own Bible, "
-            "preferably NLV. As you read, identify the main events, commands, promises, "
-            "warnings, examples of faith, examples of sin, and what the passage reveals about God."
+            "No approved briefing is currently available for this reading yet. "
+            "Please read the passage directly in your own Bible, preferably NLV."
         ),
         "context": (
-            "This passage should be read as part of the larger storyline of Scripture: creation, "
-            "fall, covenant, redemption, Christ, and restoration. Ask how this reading connects "
-            "to what came before and how it points toward mankind’s need for God’s rescue."
+            "No approved context notes are currently available for this passage."
         ),
-        "cross_references": [
-            "Luke 24:27",
-            "John 5:39",
-            "Romans 15:4",
-            "2 Timothy 3:16-17",
-        ],
+        "cross_references": [],
         "key_takeaways": [
-            "Look for what the passage reveals about God’s character.",
-            "Look for what the passage reveals about human nature and sin.",
-            "Identify commands to obey, promises to trust, and warnings to heed.",
-            "Ask how this passage fits into God’s larger plan of redemption through Jesus Christ.",
+            "Read the passage carefully and note what it reveals about God.",
+            "Look for commands to obey, promises to trust, sins to avoid, and examples to follow.",
+            "Ask how this passage fits into the larger story of Scripture and points to the need for Christ.",
         ],
         "application": (
-            "What is one specific truth from today’s reading that should change how you think, "
-            "pray, speak, or act today?"
+            "What is one truth from this reading that should affect how you think, pray, speak, or act today?"
         ),
     }
 
@@ -89,22 +153,45 @@ def format_reading_breakdown(
         "",
         "Read this passage in your own Bible, preferably NLV.",
         "",
-        "Overview:",
-        briefing.get("overview", ""),
-        "",
-        "Context:",
-        briefing.get("context", ""),
-        "",
-        "Cross References:",
     ]
 
-    for item in briefing.get("cross_references", []):
-        body_lines.append(f"- {item}")
+    if not briefing.get("_approved"):
+        body_lines.extend(
+            [
+                "Briefing Status:",
+                "No approved briefing is currently available for this reading yet.",
+                "The notes below are limited so you can still continue the reading plan.",
+                "",
+            ]
+        )
+
+    body_lines.extend(
+        [
+            "Overview:",
+            briefing.get("overview", ""),
+            "",
+            "Context:",
+            briefing.get("context", ""),
+            "",
+            "Cross References:",
+        ]
+    )
+
+    cross_references = briefing.get("cross_references", [])
+    if cross_references:
+        for item in cross_references:
+            body_lines.append(f"- {item}")
+    else:
+        body_lines.append("- No approved cross references available yet.")
 
     body_lines.extend(["", "Key Takeaways:"])
 
-    for item in briefing.get("key_takeaways", []):
-        body_lines.append(f"- {item}")
+    key_takeaways = briefing.get("key_takeaways", [])
+    if key_takeaways:
+        for item in key_takeaways:
+            body_lines.append(f"- {item}")
+    else:
+        body_lines.append("- No approved key takeaways available yet.")
 
     body_lines.extend(
         [
@@ -129,7 +216,12 @@ def format_daily_email(
     reference: str,
     briefings_path: str | None = None,
 ) -> tuple[str, str]:
-    subject = f"Bible Study - {reading_date} - {reference}"
+    briefing = build_daily_briefing(reference, briefings_path=briefings_path)
+
+    if briefing.get("_approved"):
+        subject = f"Bible Study - {reading_date} - {reference}"
+    else:
+        subject = f"Bible Study - {reading_date} - {reference} - Briefing Pending"
 
     body = format_reading_breakdown(
         reading_date=reading_date,
